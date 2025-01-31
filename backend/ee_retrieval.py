@@ -6,7 +6,8 @@ import numpy as np
 from sklearn.linear_model import HuberRegressor
 import os
 from scipy import interpolate
-from backend.radtran import retrieve
+import traceback
+# from backend.radtran import retrieve
 
 # Dev log
 # Oct14: Landsat 9 added; 
@@ -103,7 +104,7 @@ def get_s2_cld_col(aoi, start_date, end_date):
     #     )
 
     # Import and filter S2.
-    s2_sr_col_all = (ee.ImageCollection('COPERNICUS/S2')
+    s2_sr_col_all = (ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
         .filterBounds(aoi)
         .filterDate(start_date, end_date)
         )
@@ -151,20 +152,28 @@ def last_day_of_month(any_day):
     # subtracting the number of the current day brings us back one month
     return next_month - timedelta(days=next_month.day)
 
-def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieval=False, satellite='L8'):
+def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieval=False, 
+    satellite='L8', wind_source='GFS', projection='default'):
     '''
-    dX/dY: distance (km) in NS/WE direction
+    dX/dY: distance (km) in NS/WE direction; 1.5 km by default.
     lon: longitude (~180 -- 180)
     lat: latitude
     startDate/endDate: string ('YYYY-MM-DD') for initial/final date
     do_retrieval: flag for calculating XCH4 using the MBSP approach
     satellite: Satellite name (L4, L5, L7, L8, and S2) 
+    projection: For example 'EPSG:3395'. If 'default' will use native GEE projection.
     '''
     # Initialize Earth Engine
+    # If not in path, set up with ee.Initialize(project='methane-tgger-test')
     ee.Initialize()
 
     # Coordinate mapping for rectangle of plume
+    # Conversion is for degrees to km in small AOI (since does not account for polar flattening)
+    # Latitude: 1 deg = 110.574 km
+    # Longitude: 1 deg = 111.320*cos(latitude) km
+    print("dX, dY: ", dX, dY)
     grid_pt = (lat, lon)
+    print("grid_pt: ", grid_pt)
     dlat = dY/110.574
     dlon = dX/111.320/np.cos(lat*0.0174532925)
     print('dlat, dlon: ', dlat, dlon)
@@ -172,6 +181,7 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
     E=grid_pt[1]+dlon
     N=grid_pt[0]+dlat
     S=grid_pt[0]-dlat
+    print("W, E, N, S: ", W, E, N, S)
     re   = ee.Geometry.Point(lon, lat)
     region = ee.Geometry.Polygon(
         [[W, N],\
@@ -224,6 +234,10 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
                                                                         swir2band,
                                                                         cloudband])
 
+    # Filter out data with cloud cover > 50%
+    img_collection = img_collection.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 50)) 
+
+
     # initialize arrays
     chanlarr = None
     zarr = None
@@ -242,7 +256,6 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
 
     # convert to list of images
     collectionList = img_collection.toList(img_collection.size())
-
 
 
     if img_collection.size().getInfo() == 0:
@@ -282,15 +295,25 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
             imgdate = datetime(1970, 1, 1, 0, 0) + timedelta(seconds=currentimg.date().getInfo()['value']/1000)
             tkframe.post_print('>  ==> Img date: ' + imgdate.strftime('%Y-%m-%d %H:%M%S'))
 
+            # Determine default projection (CRS is the same for all bands)
+            projection_default = currentimg.select(swir1band).projection()
+            if projection == 'default':
+                projection = projection_default
+                print("default projection: ", projection.getInfo())
+                
+
+            if wind_source == 'ERA5':
+                wind_folder, u_varname, v_varname = "ECMWF/ERA5/DAILY", 'u_component_of_wind_10m','v_component_of_wind_10m'
+            elif wind_source == 'GFS':
+                wind_folder, u_varname, v_varname = 'NOAA/GFS0P25', 'u_component_of_wind_10m_above_ground', 'v_component_of_wind_10m_above_ground'
             try:
-                wind_collection = ee.ImageCollection("ECMWF/ERA5/DAILY").filterDate(imgdate.strftime('%Y-%m-%d')).filterBounds(era5_region).select(['u_component_of_wind_10m','v_component_of_wind_10m'])
+                wind_collection = ee.ImageCollection(wind_folder).filterDate(imgdate.strftime('%Y-%m-%d')).filterBounds(era5_region).select([u_varname, v_varname])
                 wind = wind_collection.first()
-                u = geemap.ee_to_numpy(wind.select('u_component_of_wind_10m'), region = era5_region)/1.944 # convert m/s to knots
-                v = geemap.ee_to_numpy(wind.select('v_component_of_wind_10m'), region = era5_region)/1.944 # convert m/s to knots
+                u = geemap.ee_to_numpy(wind.select(u_varname), region = era5_region)
+                v = geemap.ee_to_numpy(wind.select(v_varname), region = era5_region)
                 u = np.nanmean(u)
                 v = np.nanmean(v)
             except:
-                tkframe.post_print('>  ==> ERA5 U/V winds NA')
                 u10m.append(None)
                 v10m.append(None)
                 pass
@@ -300,8 +323,10 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
 
 
 
-            lons = currentimg.pixelLonLat().select('longitude').reproject(crs=ee.Projection('EPSG:3395'), scale=30)
-            lats = currentimg.pixelLonLat().select('latitude').reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+
+
+            lons = currentimg.pixelLonLat().select('longitude').reproject(crs=ee.Projection(projection), scale=30)
+            lats = currentimg.pixelLonLat().select('latitude').reproject(crs=ee.Projection(projection), scale=30)
             lons = np.squeeze(geemap.ee_to_numpy(lons, region=region))
             lats = np.squeeze(geemap.ee_to_numpy(lats, region=region))
 
@@ -309,8 +334,8 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
 
             B6channel = currentimg.select(swir1band).multiply(scaleFac)
             B7channel = currentimg.select(swir2band).multiply(scaleFac)
-            SWIR1img = B6channel.reproject(crs=ee.Projection('EPSG:3395'), scale=30)
-            SWIR2img = B7channel.reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            SWIR1img = B6channel.reproject(crs=ee.Projection(projection), scale=30)
+            SWIR2img = B7channel.reproject(crs=ee.Projection(projection), scale=30)
 
             # To numpy array
             SWIR1_geemap = geemap.ee_to_numpy(SWIR1img, region=region, default_value=_default_value)
@@ -334,42 +359,42 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
             b0 = 1/model.coef_[0] #This slope is SWIR2/SWIR1 
 
             dR = ee.Image(B6channel.multiply((b0)).subtract(B7channel).divide(B7channel)).rename('dR')
-            dR = dR.reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            dR = dR.reproject(crs=ee.Projection(projection), scale=30)
             dR = np.squeeze(geemap.ee_to_numpy(dR, region=region, default_value=_default_value))
             dR[dR == _default_value] = np.nan
 
-            if do_retrieval:
-                test_retrieval = retrieve(dR, 'L8', method, targheight, obsheight, solarangle, obsangle, num_layers) ### retrieval
-                z = test_retrieval*-1
+            # if do_retrieval:
+            #     test_retrieval = retrieve(dR, 'L8', method, targheight, obsheight, solarangle, obsangle, num_layers) ### retrieval
+            #     z = test_retrieval*-1
 
             # get RGB, NIR, SWIRI, SWIRII channels from Landsat 8
-            bchannel = currentimg.select(blueband).multiply(scaleFac).reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            bchannel = currentimg.select(blueband).multiply(scaleFac).reproject(crs=ee.Projection(projection), scale=30)
             bchannel = np.squeeze(geemap.ee_to_numpy(bchannel, region=region, default_value=_default_value))
 
-            gchannel = currentimg.select(greenband).multiply(scaleFac).reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            gchannel = currentimg.select(greenband).multiply(scaleFac).reproject(crs=ee.Projection(projection), scale=30)
             gchannel = np.squeeze(geemap.ee_to_numpy(gchannel, region=region, default_value=_default_value))
 
-            rchannel = currentimg.select(redband).multiply(scaleFac).reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            rchannel = currentimg.select(redband).multiply(scaleFac).reproject(crs=ee.Projection(projection), scale=30)
             rchannel = np.squeeze(geemap.ee_to_numpy(rchannel, region=region, default_value=_default_value))
 
-            nirchannel = currentimg.select(nirband).multiply(scaleFac).reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            nirchannel = currentimg.select(nirband).multiply(scaleFac).reproject(crs=ee.Projection(projection), scale=30)
             nirchannel = np.squeeze(geemap.ee_to_numpy(nirchannel, region=region, default_value=_default_value))
 
-            swir1channel = currentimg.select(swir1band).multiply(scaleFac).reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            swir1channel = currentimg.select(swir1band).multiply(scaleFac).reproject(crs=ee.Projection(projection), scale=30)
             swir1channel = np.squeeze(geemap.ee_to_numpy(swir1channel, region=region, default_value=_default_value))
 
-            swir2channel = currentimg.select(swir2band).multiply(scaleFac).reproject(crs=ee.Projection('EPSG:3395'), scale=30)
+            swir2channel = currentimg.select(swir2band).multiply(scaleFac).reproject(crs=ee.Projection(projection), scale=30)
             swir2channel = np.squeeze(geemap.ee_to_numpy(swir2channel, region=region, default_value=_default_value))
 
             if satellite == 'Sentinel-2':
-                cloudscore = currentimg.select('cloud_prob').reproject(crs=ee.Projection('EPSG:3395'), scale=30)
-                cloudscore = np.squeeze(geemap.ee_to_numpy(cloudscore, region=region, default_value=None))
+                cloudscore = currentimg.select('cloud_prob').reproject(crs=ee.Projection(projection), scale=30)
+                cloudscore = np.squeeze(geemap.ee_to_numpy(cloudscore, region=region, default_value=None)).astype(float)
             else:
                 cloudscore = ee.Algorithms.Landsat.simpleCloudScore(currentimg).select(['cloud'])
-                cloudscore = cloudscore.reproject(crs=ee.Projection('EPSG:3395'), scale=30).float()
+                cloudscore = cloudscore.reproject(crs=ee.Projection(projection), scale=30).float()
                 cloudscore = np.squeeze(geemap.ee_to_numpy(cloudscore, region=region, default_value=999)).astype(float)
 
-            print(cloudscore)
+            # print(cloudscore)
             # Make sure the cloudscore isn't empty
             if cloudscore.all() == None:
                 cloudscore    = np.empty(bchannel.shape)
@@ -444,6 +469,7 @@ def get_plume(tkframe, lon, lat, startDate, endDate, dX=1.5, dY=1.5, do_retrieva
                     zarr = np.append(zarr, None)
         except Exception as e:
             tkframe.post_print(">  ==> !!!Something went wrong!!!: " + str(e))
+            print(traceback.format_exc())
             pass
     return id_list, date_list, date_list2, chanlarr, zarr, lonarr, latarr, u10m, v10m
 

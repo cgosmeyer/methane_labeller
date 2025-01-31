@@ -3,10 +3,8 @@ A GUI for labelling methane plumes from O&G super emitters, using images from La
 ![](figs/animation.gif)
 
 ## Steps to set up the environment
-* Install the gcloud CLI following instructions here: https://cloud.google.com/sdk/docs/install#linux
-* Install Google Earth Engine API following these instructions: https://developers.google.com/earth-engine/guides/python_install-conda. Don't skip the "Setting up authentication credentials" step.
-* Set up the Python environment using the environment file provided: ```conda env create -f environment_ch4_labeller.yml```
-* X11 forwarding is required if GUI is run remotely.
+```conda create -n ch4_labeller python=3.10 geemap=0.16.7 earthengine-api tk=8.6.12 matplotlib=3.4.3 cartopy=0.20.3 proplot=0.9 netCDF4 scikit-learn scikit-image ```
+
 
 ## Steps to use the GUI
 * Run the GUI: ```python ch4_labeller.py'''. Below is a screenshot of the interface.

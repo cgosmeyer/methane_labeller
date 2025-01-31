@@ -1,6 +1,6 @@
 ##############################################################################
 #                  Methane labeller GUI                            
-#  Authors: Tai-Long He (taihe@uw.edu), Alex J Turner, Ryan J Boyd         
+#  Authors: Tai-Long He (taihe@uw.edu), Alex J Turner, Ryan J Boyd, Catherine Gosmeyer       
 ##############################################################################
 from tkinter import END
 import tkinter as tk
@@ -105,6 +105,7 @@ class Application(tk.Tk):
         self.lonnow = tk.DoubleVar(self)
         self.yynow = tk.IntVar(self)
         self.mmnow = tk.IntVar(self)
+        self.ddnow = tk.IntVar(self) ##
         self.dxdy = tk.DoubleVar(self)
         
         # Disablize the resizability of the GUI.
@@ -151,29 +152,34 @@ class Application(tk.Tk):
         self.mm_entry.place(relx=0.92, rely=0.25)
         self.mm_label = tk.Label(self, foreground='red', text='Month: ')
         self.mm_label.place(relx=leftbound, rely=0.25)
+
+        self.dd_entry = tk.Entry(self, width = 12) ##
+        self.dd_entry.place(relx=0.92, rely=0.3) ##
+        self.dd_label = tk.Label(self, foreground='red', text='Day: ') ##
+        self.dd_label.place(relx=leftbound, rely=0.3) ##
         
         self.dxdy_entry = tk.Entry(self, width = 12)
-        self.dxdy_entry.place(relx=0.92, rely=0.3)
-        self.dxdy_entry.insert(0, "1.5")
+        self.dxdy_entry.place(relx=0.92, rely=0.35)
+        self.dxdy_entry.insert(0, "1.9")
         self.dxdy_label = tk.Label(self, foreground='red', text='dX/dY (km): ')
-        self.dxdy_label.place(relx=leftbound, rely=0.3)
+        self.dxdy_label.place(relx=leftbound, rely=0.35)
 
         # Buttons
         self.search_button = tk.Button(self, text='Search', command=lambda:self.do_search())
-        self.search_button.place(relx=leftbound, rely=0.35)
+        self.search_button.place(relx=leftbound, rely=0.4)
         
         self.left_button = tk.Button(self, text='<<', command=lambda:move_img(-1))
-        self.left_button.place(relx=0.92, rely=0.35)
+        self.left_button.place(relx=0.92, rely=0.4)
         self.right_button = tk.Button(self, text='>>', command=lambda:move_img(1))
-        self.right_button.place(relx=0.95, rely=0.35)
+        self.right_button.place(relx=0.95, rely=0.4)
         self.save_button = tk.Button(self, text='Save', command=lambda:save_output())
-        self.save_button.place(relx=0.95, rely=0.40)
+        self.save_button.place(relx=0.95, rely=0.45)
         self.fill_button = tk.Button(self, text='Clear mask', command=lambda:clear_mask())
-        self.fill_button.place(relx=leftbound, rely=0.40)
+        self.fill_button.place(relx=leftbound, rely=0.45)
         
         # action status label
         self.action_label = tk.Label(self, foreground='red')
-        self.action_label.place(relx=leftbound, rely=0.45)
+        self.action_label.place(relx=leftbound, rely=0.5)
         
         # Figure frame
         self.figure_frame = tk.Frame(self, width = 60, height=50)
@@ -202,6 +208,7 @@ class Application(tk.Tk):
             satenow = self.satenow.get()
             yynow = int(self.yy_entry.get())
             mmnow = int(self.mm_entry.get())
+            ddnow = int(self.dd_entry.get())
 
             if latnow > 85 or latnow < -85 or lonnow < -180 or lonnow > 360 or mmnow not in MONTHS or satenow not in satellite_database.keys():
                 print(satellite_database.keys())
@@ -211,6 +218,7 @@ class Application(tk.Tk):
                 self.post_print('>  ==> Latitude: %.2f' % latnow)
                 self.post_print('>  ==> Year: %04d' % yynow)
                 self.post_print('>  ==> Month: %02d' % mmnow)
+                self.post_print('>  ==> Day: %02d' % ddnow) ##
                 return False
             else:
                 return True
@@ -227,6 +235,7 @@ class Application(tk.Tk):
             self.lonnow = float(self.lon_entry.get())
             self.yynow = int(self.yy_entry.get())
             self.mmnow = int(self.mm_entry.get())
+            self.ddnow = int(self.dd_entry.get())
             self.dxdy = float(self.dxdy_entry.get())
 
             self.post_print('>  ~~~~~~~~~~~~~~~~~~~~~')
@@ -236,13 +245,15 @@ class Application(tk.Tk):
             self.post_print('>  ==> Latitude : %.3f' % self.latnow)
             self.post_print('>  ==> Year:      %04d' % self.yynow)
             self.post_print('>  ==> Month:     %02d' % self.mmnow)
+            self.post_print('>  ==> Day:     %02d' % self.ddnow) ##
             self.post_print('>  ==> dXdY (km): %.1f' % self.dxdy)
             self.post_print('>  ~~~~~~~~~~~~~~~~~~~~~')
             current_sate = self.satenow.get()
             center_lon, center_lat = self.lonnow, self.latnow
-            start_time = datetime(self.yynow, self.mmnow, 1, 0, 0)  #
-            end_time = start_time + timedelta(days=40)
-            end_time = datetime(end_time.year, end_time.month, 1, 0, 0)
+            now_time = datetime(self.yynow, self.mmnow, self.ddnow, 0, 0)  #
+            start_time = now_time - timedelta(days=20) #
+            end_time = now_time + timedelta(days=20) #
+            #end_time = datetime(end_time.year, end_time.month, 1, 0, 0)
             self.post_print('> Searching for: ' + start_time.strftime('%Y-%m-%d --> ') + end_time.strftime('%Y-%m-%d'))
             img_id_list, date_list, img_date_list, imgchannels, imgxch4, imglons, imglats, u10m, v10m = get_plume(self, self.lonnow, self.latnow, start_time.strftime('%Y-%m-%d'), end_time.strftime('%Y-%m-%d'), dX=self.dxdy, dY=self.dxdy, do_retrieval=False, satellite=current_sate)  # 5.905613686710645, 31.65857047520231  # 31.6585, 5.9053  # self.satenow.get()
             img_idx = 0
@@ -448,7 +459,8 @@ def onrelease(event):
 #------------------------------------------------
 
 def get_filename():
-    return '%s_%.3fEx%.3fN_%s_imgMonID%d'%(satellite_database[current_sate]['Shortname'], center_lon, center_lat, img_date_list[img_idx].strftime('%Y%m%d_%H%M%S'), img_idx)
+    filename = '%s_%.3fEx%.3fN_%s_imgMonID%d'%(satellite_database[current_sate]['Shortname'], center_lon, center_lat, img_date_list[img_idx].strftime('%Y%m%d_%H%M%S'), img_idx)
+    return filename.replace('.', '_')
 
 def save_output():
     global app, fig, img_idx
@@ -456,6 +468,7 @@ def save_output():
 
     outdir = 'labelled_plumes/'
     subdir = "%.3f_%.3f/"%(center_lon, center_lat)
+    subdir = subdir.replace('.', '_')
     if not os.path.exists(outdir + subdir + get_filename()):
         os.makedirs(outdir + subdir + get_filename())
 
